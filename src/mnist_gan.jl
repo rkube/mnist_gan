@@ -25,7 +25,7 @@ Generative Adversarial Networks by I. Goodfellow et al. 2014 https://arxiv.org/a
 - num_epochs: Number of epochs to train the network
 - output_period: Period with which to plot generator samples to the terminal
 """
-function run_mnist_gan(η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, output_period=100)
+function run_mnist_gan(;η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, output_period=100)
     # Number of features per MNIST sample
     n_features = 28*28
     # Latent dimension of the generator
@@ -123,14 +123,20 @@ function run_mnist_gan(η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, o
     end
 
     println("Entering training loop")
+    lossvec_gen = zeros(num_epochs)
+    lossvec_dscr = zeros(num_epochs)
+
     for n in 1:num_epochs
+        loss_sum_gen = 0.0f0
+        loss_sum_dscr = 0.0f0
+
         for (x, y) in train_loader
             # Samples in the current batch, handles edge case
             this_batch = size(x)[end]
             # Train the discriminator
             # - Flatten the images, which squashes all dimensions and keeps the 
             #   the last dimension, which is the batch dimension
-            real_data = flatten(x) ;
+            real_data = flatten(x);
 
             # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
             noise = randn(latent_dim, this_batch) |> gpu
@@ -139,13 +145,19 @@ function run_mnist_gan(η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, o
             # Update the discriminator by ascending its stochastic gradient
             # ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
             loss_dscr = train_dscr!(discriminator, real_data, fake_data, this_batch)
+            loss_sum_dscr += loss_dscr
 
             #   Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
             #   Update the generator by descending its stochastic gradient
             #       ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
             loss_gen = train_gen!(discriminator, generator)
-
+            loss_sum_gen += loss_gen
         end
+
+        # Add the per-sample loss of the generator and discriminator
+        lossvec_gen[n] = loss_sum_gen / size(train_x)[end]
+        lossvec_dscr[n] = loss_sum_dscr / size(train_x)[end]
+
         if n % output_period == 0
             @show n
             noise = randn(latent_dim, 4) |> gpu;
@@ -153,7 +165,9 @@ function run_mnist_gan(η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, o
             p = heatmap(fake_data, colormap=:inferno)
             print(p)
         end
-    end
+    end # Training loop
+    return lossvec_gen, lossvec_dscr
+
 end
 
 end

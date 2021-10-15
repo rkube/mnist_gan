@@ -1,145 +1,161 @@
 module mnist_gan
 
-
-# This is an implementation of a GAN to model the MNIST dataset
-# Adapted from pytorch:
-# https://medium.com/ai-society/gans-from-scratch-1-a-deep-introduction-with-code-in-pytorch-and-tensorflow-cb03cdcdba0f
-
 using MLDatasets: MNIST
 using Flux.Data: DataLoader
 using Flux
+using CUDA
+using Zygote
+using UnicodePlots
 
-batch_size=128
-n_features = 28*28
-n_gen = 100
-num_epochs = 1
-η = 2e-4
+"""
+    run_mnist_gan
 
-# Load MNIST train and test data
-train_x, train_y = MNIST.traindata(Float32)
-test_x, test_y = MNIST.testdata(Float32)
+Trains a vanilla GAN on the MNIST dataset
 
-train_x = reshape(train_x, 28, 28, 1, :)
-test_x = reshape(test_x, 28, 28, 1, :)
+This is adapated from the pytorch tutorial presented here
+    https://medium.com/ai-society/gans-from-scratch-1-a-deep-introduction-with-code-in-pytorch-and-tensorflow-cb03cdcdba0f
 
-train_y, test_y = Flux.onehotbatch(train_y, 0:9), Flux.onehotbatch(test_y, 0:9)
+Generative Adversarial Networks by I. Goodfellow et al. 2014 https://arxiv.org/abs/1406.2661
 
-# Now load the train images and labels into a DataLoader
-train_loader = DataLoader((data=train_x, label=train_y), batchsize=batch_size, shuffle=true)
+# Arguments
 
-# Define the discriminator network. 
-# The networks takes a flattened 28x28=784 image as input and outputs the
-# probability of the image belonging to the real dataset.
-train_x, train_y = MNIST.traindata(Float32)
-test_x, test_y = MNIST.testdata(Float32)
+- 'η_d': Learning rate of the discriminator network
+- 'η_g': Learning rate of the generator network
+- batch_size: Number of images presented to the networks in each batch
+- num_epochs: Number of epochs to train the network
+- output_period: Period with which to plot generator samples to the terminal
+"""
+function run_mnist_gan(η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, output_period=100)
+    # Number of features per MNIST sample
+    n_features = 28*28
+    # Latent dimension of the generator
+    latent_dim = 100
 
-discriminator = Chain(Dense(n_features, 1024, leakyrelu),
-                      Dropout(0.3),
-                      Dense(1024, 512, leakyrelu),
-                      Dropout(0.3),
-                      Dense(512, 256, leakyrelu),
-                      Dropout(0.3),
-                      Dense(256, 1, sigmoid))
+    # Load MNIST train and test data
+    train_x, train_y = MNIST.traindata(Float32);
+    test_x, test_y = MNIST.testdata(Float32);
 
-# The input to the discriminator is a flat vector.
-# To pass a batch of images to the discriminator we need to flatten the input
-x, y = first(train_loader);
-predictions = discriminator(flatten(x))
-size(predictions) == (1, batch_size)
+    # This dataset has pixel values ∈ [0:1]. Map these to [-1:1]
+    # See GAN hacks: https://github.com/soumith/ganhacks
+    train_x = 2f0 * reshape(train_x, 28, 28, 1, :) .- 1f0 |>gpu;
+    test_x = 2f0 * reshape(test_x, 28, 28, 1, :) .- 1f0 |> gpu;
+
+    train_y = Flux.onehotbatch(train_y, 0:9) |> gpu; 
+    test_y = Flux.onehotbatch(test_y, 0:9) |> gpu;
+
+    # Insert the train images and labels into a DataLoader
+    train_loader = DataLoader((data=train_x, label=train_y), batchsize=batch_size, shuffle=true);
+
+    # Define the discriminator network. 
+    # The networks takes a flattened 28x28=784 image as input and outputs the
+    # probability of the image belonging to the real dataset.
+    # I had a hard time training this when used the default value of a=0.01 in LeakyReLU.I.e.
+    # the syntax ... Dense(1024, 512, leakyrelu)... did not work well. 
+    # I really need x -> leakyrelu(x, 0.2f0)
+    discriminator = Chain(Dense(n_features, 1024, x -> leakyrelu(x, 0.2f0)),
+                          Dropout(0.3),
+                          Dense(1024, 512, x -> leakyrelu(x, 0.2f0)),
+                          Dropout(0.3),
+                          Dense(512, 256, x -> leakyrelu(x, 0.2f0)),
+                          Dropout(0.3),
+                          Dense(256, 1, sigmoid)) |> gpu
+
+    # The generator will generate images which come from the learned
+    # distribution. The output layer has a tanh activation function
+    # which maps the output to [-1:1], the same range as in the 
+    # pre-processed MNIST images
+
+    generator = Chain(Dense(latent_dim, 256, x -> leakyrelu(x, 0.2f0)),
+                      Dense(256, 512, x -> leakyrelu(x, 0.2f0)),
+                      Dense(512, 1024, x -> leakyrelu(x, 0.2f0)),
+                      Dense(1024, n_features, tanh)) |> gpu
 
 
-# The generator will generate images which come from the learned
-# distribution. The output layer has a tanh activation function
-# which maps the output to [-1:1], the same range as in the 
-# pre-processed MNIST images
+    # Optimizer for the discriminator
+    opt_dscr = ADAM(η_d)
+    opt_gen = ADAM(η_g)
 
-generator = Chain(Dense(n_gen, 256, leakyrelu),
-                  Dense(256, 512, leakyrelu),
-                  Dense(512, 1024, leakyrelu),
-                  Dense(1024, n_features))
+    function train_dscr!(discriminator, real_data, fake_data, this_batch)
+        # Given real and fake data, update the parameters of the discriminator network in-place
+        # Assume that size(real_data) = 784xthis_batch
+        # this_batch is the number of samples in the current batch
+        # Concatenate real and fake data into one big vector
+        all_data = hcat(real_data, fake_data)
+        # Target vector for predictions
+        all_target = [ones(eltype(real_data), 1, this_batch) zeros(eltype(fake_data), 1, this_batch)] |> gpu;
 
-# The algorithm that describes training of a GAN using stochastic gradient descent
-#
-# for number in training iterations do
-#   for k steps do
-#       Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
-#       Sample minibatch of m examples x¹, …, xᵐ from data generating distribution p_data(x)
-#       Update the discriminator by ascending its stochastic gradient
-#       ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
-#   end for
-#   
-#   Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
-#   Update the generator by descending its stochastic gradient
-#       ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
-#   end for
+        ps = Flux.params(discriminator)
+        loss, back = Zygote.pullback(ps) do
+            preds = discriminator(all_data)
+            # The documentation says to use logitbinarycrossentropy, but for this case the plain
+            # binarycrossentropy works fine
+            loss = Flux.Losses.binarycrossentropy(preds, all_target)
+        end
+        # To get the gradients we evaluate the pullback with 1.0 as a seed gradient.
+        grads = back(1f0)
 
-# Optimizer for the discriminator
-opt_dscr = ADAM(η)
-opt_gen = ADAM(η)
-
-function train_dscr(discriminator, real_data, fake_data)
-    # Given real and fake data, update the parameters of the discriminator network
-    # Assume that size(real_data) = 784xBS
-    # Feed real data to the discriminator. For these, the discriminator should return ones.
-    pred_real = discriminator(real_data)
-    grads_real = gradient(Flux.params(discriminator)) do
-        loss_real = Flux.Losses.logitbinarycrossentropy(pred_real, ones(size(pred_real)))
+        # Update the parameters of the discriminator with the gradients we calculated above
+        Flux.update!(opt_dscr, Flux.params(discriminator), grads)
+        
+        return loss 
     end
-    loss_real = Flux.Losses.logitbinarycrossentropy(pred_real, ones(size(pred_real)))
-    
+     
 
-    # Train on fake data
-    # Generate fake data and feed it to the discrminiator. For these, the discriminator should return zeros.
-    pred_fake = discriminator(fake_data)
-    grads_fake = gradient(Flux.params(discriminator)) do
-        loss_fake = Flux.Losses.logitbinarycrossentropy(pred_fake, zeros(size(pred_fake)))
+    function train_gen!(discriminator, generator)
+        # Updates the parameters of the generator in-place
+        # Let the generator create fake data which should out-smart the discriminator
+        # The discriminator is fooled if it outputs a 1 for the samples generated
+        # by the generator.
+        noise = randn(latent_dim, batch_size) |> gpu;
+
+        ps = Flux.params(generator)
+        # Evaluate the loss function while calculating the pullback. We get the loss for free
+        # by manually calling Zygote.pullback.
+        loss, back = Zygote.pullback(ps) do
+            preds = discriminator(generator(noise));
+            loss = Flux.Losses.binarycrossentropy(preds, 1.) 
+        end
+        # Evaluate the pullback with a seed-gradient of 1.0 to get the gradients for
+        # the parameters of the generator
+        grads = back(1.0f0)
+        Flux.update!(opt_gen, Flux.params(generator), grads)
+        return loss
     end
-    loss_fake = Flux.Losses.logitbinarycrossentropy(pred_fake, zeros(size(pred_fake)))
 
-    # Update the parameters of the discriminator with the respective gradients.
-    # This happens in-place(! of function signature)
-    Flux.update!(opt_dscr, Flux.params(discriminator), grads_real)
-    Flux.update!(opt_dscr, Flux.params(discriminator), grads_fake)
+    println("Entering training loop")
+    for n in 1:num_epochs
+        for (x, y) in train_loader
+            # Samples in the current batch, handles edge case
+            this_batch = size(x)[end]
+            # Train the discriminator
+            # - Flatten the images, which squashes all dimensions and keeps the 
+            #   the last dimension, which is the batch dimension
+            real_data = flatten(x) ;
 
-    return loss_real + loss_fake, pred_real, pred_fake
+            # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
+            noise = randn(latent_dim, this_batch) |> gpu
+            fake_data = generator(noise)
+
+            # Update the discriminator by ascending its stochastic gradient
+            # ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
+            loss_dscr = train_dscr!(discriminator, real_data, fake_data, this_batch)
+
+            #   Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
+            #   Update the generator by descending its stochastic gradient
+            #       ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
+            loss_gen = train_gen!(discriminator, generator)
+
+        end
+        if n % output_period == 0
+            @show n
+            noise = randn(latent_dim, 4) |> gpu;
+            fake_data = reshape(generator(noise), 28, 4*28);
+            p = heatmap(fake_data, colormap=:inferno)
+            print(p)
+        end
+    end
 end
 
-
-function train_gen(discriminator, generator)
-    # Let the generator create fake data which should out-smart the discriminator
-    # Let's see how well the discriminator does
-    grads = gradient(Flux.params(generator)) do
-        fake_data = generator(randn(n_gen, batch_size))
-        pred = discriminator(fake_data)
-        loss = Flux.Losses.logitbinarycrossentropy(pred, ones(size(pred)))
-    end
-    @show grads
-    Flux.update!(opt_gen, Flux.params(generator), grads)
-    # Return the loss
-    loss = Flux.Losses.logitbinarycrossentropy(pred, ones(size(pred)))
 end
-
-
-for n in 1:num_epochs
-    for (x, y) in train_loader
-        # Train the discriminator
-        # First flatten the images, which squashes all dimensions and keeps the 
-        # the last dimension, which is the batch dimension
-        x = flatten(x) 
-
-        # Now generator fake data
-        fake_data = generator(randn(n_gen, batch_size))
-
-        # And train the discriminator
-        loss_dscr, pred_real, pred_fake = train_dscr(discriminator, x, fake_data)
-
-        # Train the generator
-        loss_gen = train_gen(discriminator, generator)
-
-        @show loss_dscr, loss_gen, pred_real, pred_fake
-    end
-end
-
-
 
 

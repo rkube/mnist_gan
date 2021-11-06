@@ -1,5 +1,7 @@
 module mnist_gan
 
+using Flux
+using Zygote
 
 # All GAN models
 include("models.jl")

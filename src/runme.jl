@@ -32,35 +32,44 @@ s = ArgParseSettings()
 @add_arg_table s begin
     "--lr_dscr"
         help = "Learning rate for the discriminator. Default = 0.0002"
-        argtype = Float
+        arg_type = Float64
         default = 0.0002
     "--lr_gen"
         help = "Learning rate for the generator. Default = 0.0002"
-        argtype = Float
+        arg_type = Float64
         default = 0.0002
     "--batch_size"
         help = "Batch size. Default = 1024"
-        argtype = Int
+        arg_type = Int
         default = 128
     "--num_epochs"
         help = "Number of epochs to train for. Default = 1000"
-        argtype = Int
+        arg_type = Int
         default = 1000
     "--latent_dim"
         help = "Size of the latent dimension. Default = 100"
-        argtype = Int
+        arg_type = Int
         default = 100
     "--optimizer"
         help = "Optimizer for both, generator and discriminator. Defaults to ADAM"
-        argtype = String
+        arg_type = String
         default = "ADAM"
     "--activation"
         help = "Activation function. Defaults to leakyrelu with 0.2"
-        argtype = String
+        arg_type = String
         default = "leakyrelu"
+   "--activation_alpha"
+        help = "Optional parameter for activation function, α in leakyrelu, celu, elu, etc."
+        arg_type = Float32
+        default = 0.1
 end
 
-parsed_args = parse_args(s)
+args = parse_args(s)
+
+
+for (arg, val) in args
+    println("   $arg => $val")
+end
 
 # function run_mnist_gan(;η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, output_period=100)
 # Number of features per MNIST sample
@@ -73,11 +82,11 @@ test_x, test_y = MNIST.testdata(Float32);
 
 # This dataset has pixel values ∈ [0:1]. Map these to [-1:1]
 # See GAN hacks: https://github.com/soumith/ganhacks
-train_x = 2f0 * reshape(train_x, 28, 28, 1, :) .- 1f0 #|>gpu;
-test_x = 2f0 * reshape(test_x, 28, 28, 1, :) .- 1f0 #|> gpu;
+train_x = 2f0 * reshape(train_x, 28, 28, 1, :) .- 1f0 |>gpu;
+test_x = 2f0 * reshape(test_x, 28, 28, 1, :) .- 1f0 |> gpu;
 
-train_y = Flux.onehotbatch(train_y, 0:9) #|> gpu;
-test_y = Flux.onehotbatch(test_y, 0:9) #|> gpu;
+train_y = Flux.onehotbatch(train_y, 0:9) |> gpu;
+test_y = Flux.onehotbatch(test_y, 0:9) |> gpu;
 
 # Insert the train images and labels into a DataLoader
 train_loader = DataLoader((data=train_x, label=train_y), batchsize=args["batch_size"], shuffle=true);
@@ -89,14 +98,14 @@ train_loader = DataLoader((data=train_x, label=train_y), batchsize=args["batch_s
 # the syntax ... Dense(1024, 512, leakyrelu)... did not work well.
 # I really need x -> leakyrelu(x, 0.2f0)
 #
-# discriminator = get_vanilla_discriminator()
+discriminator = get_vanilla_discriminator()
 #
 # # The generator will generate images which come from the learned
 # # distribution. The output layer has a tanh activation function
 # # which maps the output to [-1:1], the same range as in the
 # # pre-processed MNIST images
 #
-# generator = get_vanilla_generator()
+generator = get_vanilla_generator()
 #
 # # Optimizer for the discriminator
 # opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"])
@@ -130,7 +139,7 @@ train_loader = DataLoader((data=train_x, label=train_y), batchsize=args["batch_s
 #         #   Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
 #         #   Update the generator by descending its stochastic gradient
 #         #       ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
-#         loss_gen = train_gen!(discriminator, generator)
+#         loss_gen = train_gen!(discriminator, generator, args["latent_dim"])
 #         loss_sum_gen += loss_gen
 #     end
 #

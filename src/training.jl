@@ -3,14 +3,15 @@
 Function for training the discriminator and generator
 """
 
-function train_dscr!(discriminator, real_data, fake_data, this_batch)
+function train_dscr!(discriminator, real_data, fake_data)
     # Given real and fake data, update the parameters of the discriminator network in-place
     # Assume that size(real_data) = 784xthis_batch
     # this_batch is the number of samples in the current batch
     # Concatenate real and fake data into one big vector
     all_data = hcat(real_data, fake_data)
+    this_batch = size(real_data)[end]
     # Target vector for predictions
-    all_target = [ones(eltype(real_data), 1, this_batch) zeros(eltype(fake_data), 1, this_batch)] #|> gpu;
+    all_target = [ones(eltype(real_data), 1, this_batch) zeros(eltype(fake_data), 1, this_batch)] |> gpu;
 
     ps = Flux.params(discriminator)
     loss, back = Zygote.pullback(ps) do
@@ -29,12 +30,12 @@ function train_dscr!(discriminator, real_data, fake_data, this_batch)
 end
 
 
-function train_gen!(discriminator, generator)
+function train_gen!(discriminator, generator, latent_dim)
     # Updates the parameters of the generator in-place
     # Let the generator create fake data which should out-smart the discriminator
     # The discriminator is fooled if it outputs a 1 for the samples generated
     # by the generator.
-    noise = randn(latent_dim, batch_size) #|> gpu;
+    noise = randn(latent_dim, batch_size) |> gpu;
 
     ps = Flux.params(generator)
     # Evaluate the loss function while calculating the pullback. We get the loss for free

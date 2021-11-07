@@ -4,9 +4,9 @@ using Flux.Data: DataLoader
 using Flux
 using CUDA
 using Zygote
-#using UnicodePlots
+using UnicodePlots
 using ArgParse
-#using Atom; using Juno; Juno.connect(52578)
+
 """
     run_mnist_gan
 
@@ -17,13 +17,6 @@ This is adapated from the pytorch tutorial presented here
 
 Generative Adversarial Networks by I. Goodfellow et al. 2014 https://arxiv.org/abs/1406.2661
 
-# Arguments
-
-- 'η_d': Learning rate of the discriminator network
-- 'η_g': Learning rate of the generator network
-- batch_size: Number of images presented to the networks in each batch
-- num_epochs: Number of epochs to train the network
-- output_period: Period with which to plot generator samples to the terminal
 """
 
 
@@ -42,8 +35,8 @@ s = ArgParseSettings()
         help = "Batch size. Default = 1024"
         arg_type = Int
         default = 128
-    "--num_epochs"
-        help = "Number of epochs to train for. Default = 1000"
+    "--num_iterations"
+        help = "Number of training iterations. Not epochs. Default = 1000"
         arg_type = Int
         default = 100
     "--latent_dim"
@@ -62,6 +55,18 @@ s = ArgParseSettings()
         help = "Optional parameter for activation function, α in leakyrelu, celu, elu, etc."
         arg_type = Float64
         default = 0.1
+   "--train_k"
+        help = "Number of steps that the discriminator is trained while holding the generator fixed."
+        arg_type = Int
+        default = 4
+   "--prob_dropout"
+        help = "Probability for Dropout"
+        arg_type = Float64
+        default = 0.3
+   "--output_period"
+        help = "Period between graphical output of the generator, in units of training iterations."
+        arg_type = Int
+        default = 100
 end
 
 args = parse_args(s)
@@ -71,10 +76,8 @@ for (arg, val) in args
     println("   $arg => $val")
 end
 
-# function run_mnist_gan(;η_d=2e-4, η_g=2e-4, batch_size=1024, num_epochs=1000, output_period=100)
 # Number of features per MNIST sample
 n_features = 28*28
-# Latent dimension of the generator
 
 # Load MNIST train and test data
 train_x, train_y = MNIST.traindata(Float32);
@@ -94,20 +97,13 @@ train_loader = DataLoader((data=train_x, label=train_y), batchsize=args["batch_s
 # Define the discriminator network.
 # The networks takes a flattened 28x28=784 image as input and outputs the
 # probability of the image belonging to the real dataset.
-# I had a hard time training this when used the default value of a=0.01 in LeakyReLU.I.e.
-# the syntax ... Dense(1024, 512, leakyrelu)... did not work well.
-# I really need x -> leakyrelu(x, 0.2f0)
-#
 discriminator = get_vanilla_discriminator(args)
-#
-# # The generator will generate images which come from the learned
-# # distribution. The output layer has a tanh activation function
-# # which maps the output to [-1:1], the same range as in the
-# # pre-processed MNIST images
-#
-generator = get_vanilla_generator(args)
 
-#noise = randn(args["latent_dim"], 4) |> gpu;
+# The generator will generate images which come from the learned
+# distribution. The output layer has a tanh activation function
+# which maps the output to [-1:1], the same range as in the
+# pre-processed MNIST images
+generator = get_vanilla_generator(args)
 
 # Optimizer for the discriminator
 opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"])
@@ -117,19 +113,21 @@ ps_dscr = Flux.params(discriminator)
 ps_gen = Flux.params(generator)
 
 println("Entering training loop")
-lossvec_gen = zeros(args["num_epochs"]);
-lossvec_dscr = zeros(args["num_epochs"]);
+lossvec_gen = zeros(args["num_iterations"]);
+lossvec_dscr = zeros(args["num_iterations"]);
 
-for n in 1:args["num_epochs"]
+# This loop follows the algorithm described in Goodfellow et al. 2014
+# for number of training iterations
+for n in 1:args["num_iterations"]
     loss_sum_gen = 0.0f0
     loss_sum_dscr = 0.0f0
 
-    for (x, y) in train_loader
+    # for k steps do
+    for (x, y) in Base.Iterators.take(train_loader, args["train_k"])
         # Samples in the current batch, handles edge case
         this_batch = size(x)[end]
         # Train the discriminator
-        # - Flatten the images, which squashes all dimensions and keeps the
-        #   the last dimension, which is the batch dimension
+        # - Flatten the images, which squashes all dimensions and keeps the last dimension, which is the batch dimension
         real_data = flatten(x);
 
         # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
@@ -140,23 +138,24 @@ for n in 1:args["num_epochs"]
         # ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
         loss_dscr = train_dscr!(discriminator, real_data, fake_data, ps_dscr, opt_dscr)
         loss_sum_dscr += loss_dscr
-
-        #   Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
-        #   Update the generator by descending its stochastic gradient
-        #       ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
-        loss_gen = train_gen!(discriminator, generator, args["latent_dim"], ps_gen, opt_gen, args["batch_size"])
-        loss_sum_gen += loss_gen
     end
+
+    # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
+    # Update the generator by descending its stochastic gradient:
+    # ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
+    loss_gen = train_gen!(discriminator, generator, args["latent_dim"], ps_gen, opt_gen, args["batch_size"])
+    loss_sum_gen += loss_gen
+    
 
     # Add the per-sample loss of the generator and discriminator
     lossvec_gen[n] = loss_sum_gen / size(train_x)[end]
     lossvec_dscr[n] = loss_sum_dscr / size(train_x)[end]
 
-#    if n % output_period == 0
-#        @show n
-#        noise = randn(args["latent_dim"], 4) #|> gpu;
-#        fake_data = reshape(generator(noise), 28, 4*28);
-#        p = heatmap(fake_data, colormap=:inferno)
-#        print(p)
-#    end
+    if n % args["output_period"] == 0
+        @show n
+        noise = randn(args["latent_dim"], 4) |> gpu;
+        fake_data = reshape(generator(noise), 28, 4*28) |> cpu;
+        p = heatmap(fake_data, colormap=:inferno)
+        print(p)
+    end
 end # Training loop

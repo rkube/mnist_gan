@@ -1,6 +1,6 @@
 # Learning the MNIST dataset using GANs with Fluxml
-You want a Generative Adversial Network to learn the MNIST dataset using Julia's
-(FluxML)[https://www.fluxml.ai] library? This repository has you covered.
+You want a [Generative Adversial Network](https://arxiv.org/abs/1406.2661) to learn the MNIST dataset using Julia's
+[FluxML](https://www.fluxml.ai) library? This repository has you covered.
 
 Simply clone the repo and run
 ```
@@ -16,4 +16,5 @@ To list the parameters that can be set call
 ```
 $ julia --project=. src/runme.jl --help
 ```
+
 

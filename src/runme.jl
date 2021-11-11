@@ -4,8 +4,10 @@ using Flux.Data: DataLoader
 using Flux
 using CUDA
 using Zygote
-using UnicodePlots
+using Logging
+using TensorBoardLogger
 using ArgParse
+using Plots
 
 """
     run_mnist_gan
@@ -76,6 +78,11 @@ for (arg, val) in args
     println("   $arg => $val")
 end
 
+# Instantiate TensorBoardLogger
+tb_logger = TBLogger("logs/testlog")
+with_logger(tb_logger) do
+    @info "hyperparameters" args
+end
 # Number of features per MNIST sample
 n_features = 28*28
 
@@ -118,44 +125,48 @@ lossvec_dscr = zeros(args["num_iterations"]);
 
 # This loop follows the algorithm described in Goodfellow et al. 2014
 # for number of training iterations
-for n in 1:args["num_iterations"]
-    loss_sum_gen = 0.0f0
-    loss_sum_dscr = 0.0f0
+with_logger(tb_logger) do
+    for n in 1:args["num_iterations"]
+        loss_sum_gen = 0.0f0
+        loss_sum_dscr = 0.0f0
 
-    # for k steps do
-    for (x, y) in Base.Iterators.take(train_loader, args["train_k"])
-        # Samples in the current batch, handles edge case
-        this_batch = size(x)[end]
-        # Train the discriminator
-        # - Flatten the images, which squashes all dimensions and keeps the last dimension, which is the batch dimension
-        real_data = flatten(x);
+        # for k steps do
+        for (x, y) in Base.Iterators.take(train_loader, args["train_k"])
+            # Samples in the current batch, handles edge case
+            this_batch = size(x)[end]
+            # Train the discriminator
+            # - Flatten the images, which squashes all dimensions and keeps the last dimension, which is the batch dimension
+            real_data = flatten(x);
+
+            # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
+            noise = randn(args["latent_dim"], this_batch) |> gpu
+            fake_data = generator(noise)
+
+            # Update the discriminator by ascending its stochastic gradient
+            # ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
+            loss_dscr = train_dscr!(discriminator, real_data, fake_data, ps_dscr, opt_dscr)
+            loss_sum_dscr += loss_dscr
+        end
 
         # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
-        noise = randn(args["latent_dim"], this_batch) |> gpu
-        fake_data = generator(noise)
+        # Update the generator by descending its stochastic gradient:
+        # ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
+        loss_gen = train_gen!(discriminator, generator, args["latent_dim"], ps_gen, opt_gen, args["batch_size"])
+        loss_sum_gen += loss_gen
+        
 
-        # Update the discriminator by ascending its stochastic gradient
-        # ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
-        loss_dscr = train_dscr!(discriminator, real_data, fake_data, ps_dscr, opt_dscr)
-        loss_sum_dscr += loss_dscr
-    end
+        # Add the per-sample loss of the generator and discriminator
+        lossvec_gen[n] = loss_sum_gen / size(train_x)[end]
+        lossvec_dscr[n] = loss_sum_dscr / size(train_x)[end]
 
-    # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
-    # Update the generator by descending its stochastic gradient:
-    # ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
-    loss_gen = train_gen!(discriminator, generator, args["latent_dim"], ps_gen, opt_gen, args["batch_size"])
-    loss_sum_gen += loss_gen
-    
-
-    # Add the per-sample loss of the generator and discriminator
-    lossvec_gen[n] = loss_sum_gen / size(train_x)[end]
-    lossvec_dscr[n] = loss_sum_dscr / size(train_x)[end]
-
-    if n % args["output_period"] == 0
-        @show n
-        noise = randn(args["latent_dim"], 4) |> gpu;
-        fake_data = reshape(generator(noise), 28, 4*28) |> cpu;
-        p = heatmap(fake_data, colormap=:inferno)
-        print(p)
-    end
-end # Training loop
+        if n % args["output_period"] == 0
+            noise = randn(args["latent_dim"], 4) |> gpu;
+            fake_img = reshape(generator(noise), 28, 4*28) |> cpu;
+            fake_img[fake_img .> 1.0] .= 1.0
+            fake_img[fake_img .< -1.0] .= -1.0
+            fake_img = (fake_img .+ 1.0) .* 0.5
+            log_image(tb_logger, "generatedimage", fake_img, ImageFormat(202))
+        end
+        @info "test" loss_generator=lossvec_gen[n] loss_discriminator=lossvec_dscr[n]
+    end # Training loop
+end # Logger

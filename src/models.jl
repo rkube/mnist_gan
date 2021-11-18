@@ -47,3 +47,39 @@ function get_vanilla_generator(args)
                  Dense(512, 1024, act),
                  Dense(1024, 28*28, tanh)) |> gpu
 end
+
+
+function get_cdcgan_discriminator(args)
+    # This is adapted from the Keras tutorial: https://keras.io/examples/generative/conditional_gan
+    #if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
+    #    # Now continue: We want to use Base.Fix2
+    #    act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
+    #else
+    #    act = getfield(NNlib, Symbol(args["activation"]));
+    #end
+    act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
+    
+    return Chain(Conv((3, 3), 11 => 64, stride=(2, 2), pad=SamePad(), act),
+                 Conv((3, 3), 64 => 128, stride=(2, 2), pad=SamePad(), act),
+                 GlobalMaxPool(),
+                 x -> flatten(x),
+                 Dense(128, 1, sigmoid))
+end
+
+
+function get_cdcgan_generator(args)
+    # This is just the generator proposed in the Keras tutorial
+    # https://keras.io/examples/generative/conditional_gan
+    act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
+    return Chain(Dense(110, 7*7*110, act),
+                 x -> reshape(x, (7, 7, 110, :)),
+                 ConvTranspose((4, 4), 110 => 128, stride=(2, 2), pad=SamePad(), act),
+                 ConvTranspose((4, 4), 128 => 128, stride=(2, 2), pad=SamePad(), act),
+                 Conv((7, 7), 128 => 1, pad=SamePad()))
+
+end
+
+
+
+
+

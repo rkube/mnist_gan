@@ -51,13 +51,13 @@ end
 
 function get_cdcgan_discriminator(args)
     # This is adapted from the Keras tutorial: https://keras.io/examples/generative/conditional_gan
-    #if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
-    #    # Now continue: We want to use Base.Fix2
-    #    act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
-    #else
-    #    act = getfield(NNlib, Symbol(args["activation"]));
-    #end
-    act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
+    if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
+        # Now continue: We want to use Base.Fix2
+        act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
+    else
+        act = getfield(NNlib, Symbol(args["activation"]));
+    end
+    #act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
     
     return Chain(Conv((3, 3), 11 => 64, stride=(2, 2), pad=SamePad(), act),
                  Conv((3, 3), 64 => 128, stride=(2, 2), pad=SamePad(), act),
@@ -70,12 +70,18 @@ end
 function get_cdcgan_generator(args)
     # This is just the generator proposed in the Keras tutorial
     # https://keras.io/examples/generative/conditional_gan
-    act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
-    return Chain(Dense(110, 7*7*110, act),
-                 x -> reshape(x, (7, 7, 110, :)),
-                 ConvTranspose((4, 4), 110 => 128, stride=(2, 2), pad=SamePad(), act),
-                 ConvTranspose((4, 4), 128 => 128, stride=(2, 2), pad=SamePad(), act),
-                 Conv((7, 7), 128 => 1, pad=SamePad()))
+    latent_dim = args["latent_dim"]
+    if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
+        # Now continue: We want to use Base.Fix2
+        act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
+    else
+        act = getfield(NNlib, Symbol(args["activation"]));
+    end
+    return Chain(Dense(latent_dim + 10, 7*7*(latent_dim + 10), act),
+                 x -> reshape(x, (7, 7, latent_dim + 10, :)),
+                 ConvTranspose((4, 4), latent_dim + 10 => 256, stride=(2, 2), pad=SamePad(), act),
+                 ConvTranspose((4, 4), 256 => 128, stride=(2, 2), pad=SamePad(), act),
+                 Conv((7, 7), 128 => 1, pad=SamePad(), tanh))
 
 end
 

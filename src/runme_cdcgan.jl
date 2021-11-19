@@ -29,23 +29,19 @@ s = ArgParseSettings()
     "--lr_dscr"
         help = "Learning rate for the discriminator. Default = 0.0002"
         arg_type = Float64
-        default = 0.0002
+        default = 0.0003
     "--lr_gen"
         help = "Learning rate for the generator. Default = 0.0002"
         arg_type = Float64
-        default = 0.0002
+        default = 0.0003
     "--batch_size"
         help = "Batch size. Default = 1024"
         arg_type = Int
         default = 128
-    "--num_iterations"
-        help = "Number of training iterations. Not epochs. Default = 1000"
-        arg_type = Int
-        default = 100
     "--latent_dim"
         help = "Size of the latent dimension. Default = 100"
         arg_type = Int
-        default = 100
+        default = 128
     "--optimizer"
         help = "Optimizer for both, generator and discriminator. Defaults to ADAM"
         arg_type = String
@@ -58,14 +54,10 @@ s = ArgParseSettings()
         help = "Optional parameter for activation function, α in leakyrelu, celu, elu, etc."
         arg_type = Float64
         default = 0.1
-   "--train_k"
-        help = "Number of steps that the discriminator is trained while holding the generator fixed."
+   "--num_epochs"
+        help = "Number of epochs to train over"
         arg_type = Int
-        default = 4
-   "--prob_dropout"
-        help = "Probability for Dropout"
-        arg_type = Float64
-        default = 0.3
+        default = 10
    "--output_period"
         help = "Period between graphical output of the generator, in units of training iterations."
         arg_type = Int
@@ -114,87 +106,76 @@ discriminator = get_cdcgan_discriminator(args) |> gpu;
 generator = get_cdcgan_generator(args) |> gpu;
 
 # Optimizer for the discriminator
-opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"])
-opt_gen = getfield(Flux, Symbol(args["optimizer"]))(args["lr_gen"])
+opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"]);
+opt_gen = getfield(Flux, Symbol(args["optimizer"]))(args["lr_gen"]);
 # Extract the parameters of the discriminator and generator
-ps_dscr = Flux.params(discriminator)
-ps_gen = Flux.params(generator)
+ps_dscr = Flux.params(discriminator);
+ps_gen = Flux.params(generator);
 
 println("Entering training loop")
-lossvec_gen = zeros(args["num_iterations"]);
-lossvec_dscr = zeros(args["num_iterations"]);
+lossvec_gen = zeros(args["num_epochs"]);
+lossvec_dscr = zeros(args["num_epochs"]);
 
 # This loop follows the algorithm described in Goodfellow et al. 2014
 # for number of training iterations
 #with_logger(tb_logger) do
-    for n in 1:args["num_iterations"]
+    for n in 1:args["num_epochs"]
+        output = false
         loss_sum_gen = 0.0f0
         loss_sum_dscr = 0.0f0
 
-        # for k steps do
-        for (x, y) in Base.Iterators.take(train_loader, args["train_k"])
+        for (x, y) in train_loader
             # Samples in the current batch, handles edge case
             this_batch = size(x)[end]
 
             # Since we are employing a purely convolutional architecture, the one-hot
             # labels need to be re-shaped into the same dimension as the image.
             # That is, each label is now a 28x28x10 tensor where the 28x28 image
-            # of the hot channel is one, the other images are just zero.
+            # of the hot channel is one, the images in the other channels are zero.
             # 
-            # Before we do that we need to convert the onehot encoded labels into a
-            # Float Matrix. If we don't do that `repeat` will complain about reshaping
+            # Since repeating does not work for CuArrays we are still working with Matrices here
             labels = reshape(repeat(y, inner=(28*28,1)), (28, 28, 10, this_batch)) |> gpu;
-            # Concatenate the labels with the real data in tensor shape.
+            # Concatenate the labels with the real images along the channel dimension
             real_data = cat(x, labels, dims=3);
 
-            # Train the discriminator
-
-            # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
+            # Sample noise, concatenate with target labels and feed this to the generator
             noise = randn(args["latent_dim"], this_batch) |> gpu;
-            # Concatenate random noise and the one-hot labels for the generator
             random_vector_labels = cat(noise, y, dims=1);
-            # The generator will now try to generate images as specified for the labels y.
             fake_data = generator(random_vector_labels);
             
-            # To pass the real_data and fake_data to the generator we still need to 
-            # attach the labels in tensor shape to the generated data.
+            # To pass the real_data and fake_data to the generator we still need to attach the labels in tensor shape to the generated data.
             fake_data = cat(fake_data, labels, dims=3);
 
             # Update the discriminator by ascending its stochastic gradient
-            # ∇_theta_d 1\m Σ_{i=1}^{m} [ log D(xⁱ) + log(1 - D(G(zⁱ))]
             loss_dscr = train_dscr!(discriminator, real_data, fake_data, ps_dscr, opt_dscr);
             loss_sum_dscr += loss_dscr
-        end
 
-        # Sample minibatch of m noise examples z¹, …, zᵐ from noise prior pg(z)
-        # Update the generator by descending its stochastic gradient:
-        # ∇_theta_g 1/m Σ_{i=1}^{m} log(1 - D(G(zⁱ))
-        (x, y) = first(train_loader)
-        loss_gen = train_gen_cdcgan!(discriminator, generator, args["latent_dim"], y, ps_gen, opt_gen, args["batch_size"])
-        loss_sum_gen += loss_gen
+            loss_gen = train_gen_cdcgan!(discriminator, generator, args["latent_dim"], y, ps_gen, opt_gen, this_batch)
+            loss_sum_gen += loss_gen
+                
         
-
-        # Add the per-sample loss of the generator and discriminator
-        lossvec_gen[n] = loss_sum_gen / size(train_x)[end]
-        lossvec_dscr[n] = loss_sum_dscr / size(train_x)[end]
-
-        if n % args["output_period"] == 0
-            @show n
-            noise = randn(args["latent_dim"], 4);
-            random_labels = rand(0:9, 4);
-            random_labels_oh = Flux.onehotbatch(random_labels, 0:9);
-            @show random_labels
-            random_vector_labels = cat(noise, random_labels_oh, dims=1) |> gpu;
-            fake_img = reshape(generator(random_vector_labels), 28, 4*28) |> cpu;
-            fake_img[fake_img .> 1.0] .= 1.0;
-            fake_img[fake_img .< -1.0] .= -1.0;
-            fake_img = (fake_img .+ 1.0) .* 0.5;
-            p = heatmap(fake_img, colormap=:plasma);
-            print(p)
-
-
-            #log_image(tb_logger, "generatedimage", fake_img, ImageFormat(202))
+            if(n % args["output_period"] == 0 && output == false)
+                @show n
+                noise = randn(args["latent_dim"], 4);
+                random_labels = rand(0:9, 4);
+                random_labels_oh = Flux.onehotbatch(random_labels, 0:9);
+                @show random_labels
+                random_vector_labels = cat(noise, random_labels_oh, dims=1) |> gpu;
+                fake_img = reshape(generator(random_vector_labels), 28, 4*28) |> cpu;
+                fake_img = (clamp!(fake_img, -1.0f0, 1.0f0) .+ 1.0f0) * 0.5;
+                p = heatmap(fake_img, colormap=:plasma);
+                print(p)
+                #log_image(tb_logger, "generatedimage", fake_img, ImageFormat(202))
+                output = true
+            end
         end
-        @info "test" loss_generator=lossvec_gen[n] loss_discriminator=lossvec_dscr[n]
-    end # Training loop
+        # Add the per-sample loss of the generator and discriminator
+        # The train_...! function call binarycrossentropy where the default is agg=mean. That is,
+        # these function already return the per-sample loss. In the loop above we aggregate only
+        # over the number of batches. So we need to divide by the number of batches, given by
+        # length(train_loader)
+        lossvec_gen[n] = loss_sum_gen / length(train_loader)
+        lossvec_dscr[n] = loss_sum_dscr / length(train_loader)
+        @info "end of epoch" n loss_generator=lossvec_gen[n] loss_discriminator=lossvec_dscr[n]
+    end # epoch
 #end # Logger

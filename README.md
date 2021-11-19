@@ -11,7 +11,7 @@ The `runme.jl` script parses the command line and can configure various aspects 
 model and other hyperparameters through the command line. This makes it easy to call
 it from a shell-script, as is common when running large hyperparameter scans.
 
-To list the parameters that can be set call
+To list the parameters run this command
 
 ```
 $ julia --project=. src/runme.jl --help

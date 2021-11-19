@@ -22,7 +22,7 @@ Generative Adversarial Networks by I. Goodfellow et al. 2014 https://arxiv.org/a
 
 """
 
-#CUDA.allowscalar(false)
+CUDA.allowscalar(false)
 
 s = ArgParseSettings()
 @add_arg_table s begin
@@ -96,8 +96,8 @@ test_x, test_y = MNIST.testdata(Float32);
 train_x = 2f0 * reshape(train_x, 28, 28, 1, :) .- 1f0 |>gpu;
 test_x = 2f0 * reshape(test_x, 28, 28, 1, :) .- 1f0 |> gpu;
 
-train_y = Flux.onehotbatch(train_y, 0:9) |> gpu;
-test_y = Flux.onehotbatch(test_y, 0:9) |> gpu;
+train_y = Flux.onehotbatch(train_y, 0:9);
+test_y = Flux.onehotbatch(test_y, 0:9);
 
 # Insert the train images and labels into a DataLoader
 train_loader = DataLoader((data=train_x, label=train_y), batchsize=args["batch_size"], shuffle=true);
@@ -140,7 +140,10 @@ lossvec_dscr = zeros(args["num_iterations"]);
             # labels need to be re-shaped into the same dimension as the image.
             # That is, each label is now a 28x28x10 tensor where the 28x28 image
             # of the hot channel is one, the other images are just zero.
-            labels = reshape(repeat(y, inner=(28*28,1)), (28, 28, 10, this_batch));
+            # 
+            # Before we do that we need to convert the onehot encoded labels into a
+            # Float Matrix. If we don't do that `repeat` will complain about reshaping
+            labels = reshape(repeat(y, inner=(28*28,1)), (28, 28, 10, this_batch)) |> gpu;
             # Concatenate the labels with the real data in tensor shape.
             real_data = cat(x, labels, dims=3);
 
@@ -176,14 +179,18 @@ lossvec_dscr = zeros(args["num_iterations"]);
         lossvec_dscr[n] = loss_sum_dscr / size(train_x)[end]
 
         if n % args["output_period"] == 0
+            @show n
             noise = randn(args["latent_dim"], 4);
-            random_labels = Flux.onehotbatch(rand(0:9, 4), 0:9);
-            random_vector_labels = cat(noise, random_labels, dims=1) |> gpu;
+            random_labels = rand(0:9, 4);
+            random_labels_oh = Flux.onehotbatch(random_labels, 0:9);
+            @show random_labels
+            random_vector_labels = cat(noise, random_labels_oh, dims=1) |> gpu;
             fake_img = reshape(generator(random_vector_labels), 28, 4*28) |> cpu;
-            fake_img[fake_img .> 1.0] .= 1.0
-            fake_img[fake_img .< -1.0] .= -1.0
-            fake_img = (fake_img .+ 1.0) .* 0.5
-            heatmap(fake_img)
+            fake_img[fake_img .> 1.0] .= 1.0;
+            fake_img[fake_img .< -1.0] .= -1.0;
+            fake_img = (fake_img .+ 1.0) .* 0.5;
+            p = heatmap(fake_img, colormap=:plasma);
+            print(p)
 
 
             #log_image(tb_logger, "generatedimage", fake_img, ImageFormat(202))

@@ -56,7 +56,7 @@ function train_gen_cdcgan!(discriminator, generator, latent_dim, one_hot_labels,
     # Almost identical to train_gen!, but this function concatenates the batch labels
     # with random noise
     noise = cat(randn(latent_dim, batch_size), one_hot_labels, dims=1) |> gpu;
-    labels = reshape(repeat(one_hot_labels, inner=(28*28, 1)), (28, 28, 10, batch_size));
+    labels = reshape(repeat(one_hot_labels, inner=(28*28, 1)), (28, 28, 10, batch_size)) |> gpu;
     
 
     # Evaluate the loss function while calculating the pullback. We get the loss for free

@@ -1,4 +1,4 @@
-using mnist_gan: get_cdcgan_discriminator, get_cdcgan_generator, train_dscr!, train_gen_cdcgan!
+using mnist_gan: get_cdcgan_discriminator, get_cdcgan_generator, get_cdcgan_generator_v2, train_dscr!, train_gen_cdcgan!
 using MLDatasets: MNIST
 using Flux.Data: DataLoader
 using Flux
@@ -29,11 +29,11 @@ s = ArgParseSettings()
     "--lr_dscr"
         help = "Learning rate for the discriminator. Default = 0.0002"
         arg_type = Float64
-        default = 0.0003
+        default = 0.0002
     "--lr_gen"
         help = "Learning rate for the generator. Default = 0.0002"
         arg_type = Float64
-        default = 0.0003
+        default = 0.0002
     "--batch_size"
         help = "Batch size. Default = 1024"
         arg_type = Int
@@ -106,8 +106,8 @@ discriminator = get_cdcgan_discriminator(args) |> gpu;
 generator = get_cdcgan_generator(args) |> gpu;
 
 # Optimizer for the discriminator
-opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"]);
-opt_gen = getfield(Flux, Symbol(args["optimizer"]))(args["lr_gen"]);
+opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"], (0.5, 0.999));
+opt_gen = getfield(Flux, Symbol(args["optimizer"]))(args["lr_gen"], (0.5, 0.999));
 # Extract the parameters of the discriminator and generator
 ps_dscr = Flux.params(discriminator);
 ps_gen = Flux.params(generator);

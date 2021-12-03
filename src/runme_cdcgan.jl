@@ -1,4 +1,4 @@
-using mnist_gan: get_cdcgan_discriminator_v2, get_cdcgan_generator_v2, train_dscr!, train_gen_cdcgan!, gan_image_output
+using mnist_gan: get_cdcgan_discriminator, get_cdcgan_generator, train_dscr!, train_gen_cdcgan!, gan_image_output
 using MLDatasets: MNIST
 using Flux.Data: DataLoader
 using Flux

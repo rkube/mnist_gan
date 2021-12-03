@@ -52,7 +52,6 @@ function get_vanilla_critic(args)
 end
 
 
-
 function get_vanilla_generator(args)
     # The logic of this function is the same as in get_vanilla_discriminator
     if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
@@ -69,31 +68,12 @@ end
 
 
 function get_cdcgan_discriminator(args)
-    # This is adapted from the Keras tutorial: https://keras.io/examples/generative/conditional_gan
     if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
         # Now continue: We want to use Base.Fix2
         act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
     else
         act = getfield(NNlib, Symbol(args["activation"]));
     end
-    #act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
-    
-    return Chain(Conv((3, 3), 11 => 64, stride=(2, 2), pad=SamePad(), act),
-                 Conv((3, 3), 64 => 128, stride=(2, 2), pad=SamePad(), act),
-                 GlobalMaxPool(),
-                 x -> flatten(x),
-                 Dense(128, 1, sigmoid))
-end
-
-function get_cdcgan_discriminator_v2(args)
-    # This is adapted from the Keras tutorial: https://keras.io/examples/generative/conditional_gan
-    if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
-        # Now continue: We want to use Base.Fix2
-        act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
-    else
-        act = getfield(NNlib, Symbol(args["activation"]));
-    end
-    #act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
     
     return Chain(Conv((3, 3), 11 => 32, act),
                  Conv((5, 5), 32 => 64, act),
@@ -107,26 +87,7 @@ end
 
 function get_cdcgan_generator(args)
     # This is just the generator proposed in the Keras tutorial
-    # https://keras.io/examples/generative/conditional_gan
-    latent_dim = args["latent_dim"]
-    if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
-        # Now continue: We want to use Base.Fix2
-        act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
-    else
-        act = getfield(NNlib, Symbol(args["activation"]));
-    end
-
-    return Chain(Dense(latent_dim + 10, 7*7*(latent_dim+10), act),
-                 x -> reshape(x, (7, 7, latent_dim+10, :)),
-                 ConvTranspose((3, 3), latent_dim+10 => 256, stride=(2, 2), pad=SamePad(), act, bias=false),
-                 ConvTranspose((4, 4), 256 => 64, stride=(2, 2), pad=SamePad(), act, bias=false),
-                 Conv((1, 1), 64 => 1, tanh)) |> gpu;
-
-end
-
-function get_cdcgan_generator_v2(args)
-    # This is just the generator proposed in the Keras tutorial
-    # https://keras.io/examples/generative/conditional_gan
+    # https://github.com/malzantot/Pytorch-conditional-GANs
     latent_dim = args["latent_dim"]
     if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
         # Now continue: We want to use Base.Fix2

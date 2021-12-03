@@ -25,6 +25,8 @@ To train a CDCGAN run
 $ julia --project=. -i src/runme_cdcgan.jl
 ```
 The output should look something like this:
+
+
 ![Generated digits in the first 10 epochs](images/cdcgan_mnist.gif)
 
 

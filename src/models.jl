@@ -34,6 +34,25 @@ function get_vanilla_discriminator(args)
 end
 
 
+function get_vanilla_critic(args)
+    # A critic to be used in Wasserstein GANs
+    if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
+        act = Fix2(getfield(NNlib, Symbol(args["activation"])), Float32(args["activation_alpha"]))
+    else
+        act = getfield(NNlib, Symbol(args["activation"]));
+    end
+
+    return Chain(Dense(28 * 28, 1024, act),
+                 Dropout(args["prob_dropout"]),
+                 Dense(1024, 512, act),
+                 Dropout(args["prob_dropout"]),
+                 Dense(512, 256, act),
+                 Dropout(args["prob_dropout"]),
+                 Dense(256, 1)) |> gpu
+end
+
+
+
 function get_vanilla_generator(args)
     # The logic of this function is the same as in get_vanilla_discriminator
     if args["activation"] in ["celu", "elu", "leakyrelu", "trelu"]
@@ -76,15 +95,13 @@ function get_cdcgan_discriminator_v2(args)
     end
     #act = Fix2(getfield(NNlib, Symbol("leakyrelu")), Float32(0.2));
     
-    return Chain(Conv((3, 3), 11 => 64, stride=(2, 2), pad=SamePad()),
-                 BatchNorm(64, momentum=0.8),
-                 act,
-                 Conv((3, 3), 64 => 128, stride=(2, 2), pad=SamePad()),
-                 BatchNorm(128, momentum=0.8),
-                 act,
-                 GlobalMaxPool(),
+    return Chain(Conv((3, 3), 11 => 32, act),
+                 Conv((5, 5), 32 => 64, act),
+                 MaxPool((2, 2)),
                  x -> flatten(x),
-                 Dense(128, 1, sigmoid))
+                 Dense(11 * 11 * 64, 256, relu),
+                 Dropout(0.3),
+                 Dense(256, 1, sigmoid)) |> gpu;
 end
 
 
@@ -98,11 +115,12 @@ function get_cdcgan_generator(args)
     else
         act = getfield(NNlib, Symbol(args["activation"]));
     end
-    return Chain(Dense(latent_dim + 10, 7*7*(latent_dim+10), relu),
-                         x -> reshape(x, (7, 7, latent_dim+10, :)),
-                         ConvTranspose((3, 3), latent_dim+10 => 256, stride=(2, 2), pad=SamePad(), relu, bias=false),
-                         ConvTranspose((4, 4), 256 => 64, stride=(2, 2), pad=SamePad(), relu, bias=false),
-                         Conv((1, 1), 64 => 1, tanh)) |> gpu;
+
+    return Chain(Dense(latent_dim + 10, 7*7*(latent_dim+10), act),
+                 x -> reshape(x, (7, 7, latent_dim+10, :)),
+                 ConvTranspose((3, 3), latent_dim+10 => 256, stride=(2, 2), pad=SamePad(), act, bias=false),
+                 ConvTranspose((4, 4), 256 => 64, stride=(2, 2), pad=SamePad(), act, bias=false),
+                 Conv((1, 1), 64 => 1, tanh)) |> gpu;
 
 end
 
@@ -116,14 +134,11 @@ function get_cdcgan_generator_v2(args)
     else
         act = getfield(NNlib, Symbol(args["activation"]));
     end
-    return Chain(Dense(latent_dim + 10, 7*7*(latent_dim + 10), act),
-                 x -> reshape(x, (7, 7, latent_dim + 10, :)),
-                 ConvTranspose((4, 4), latent_dim + 10 => 256, stride=(1, 1), pad=SamePad() ),
-                 BatchNorm(256, relu), 
-                 ConvTranspose((4, 4), 256 => 128, stride=(2, 2), pad=SamePad() ),
-                 BatchNorm(128, relu), 
-                 Conv((7, 7), 128 => 1, pad=SamePad(), tanh))
-
+    return Chain(Dense(latent_dim + 10, 20 * 20 * (latent_dim + 10), act),
+                        x -> reshape(x, (20, 20, latent_dim + 10, :)),
+                        ConvTranspose((5, 5), latent_dim + 10 => 32, bias=false), 
+                        BatchNorm(32, act),
+                        ConvTranspose((5, 5), 32 => 1, tanh, bias=false)) |> gpu;
 end
 
 # End of file models.jl

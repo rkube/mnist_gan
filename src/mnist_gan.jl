@@ -9,4 +9,6 @@ using Base:Fix2
 include("models.jl")
 # Functions used for training
 include("training.jl")
+# Functions for output
+include("output.jl")
 end #module

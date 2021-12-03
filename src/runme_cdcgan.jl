@@ -1,4 +1,4 @@
-using mnist_gan: get_cdcgan_discriminator, get_cdcgan_generator, get_cdcgan_generator_v2, train_dscr!, train_gen_cdcgan!
+using mnist_gan: get_cdcgan_discriminator_v2, get_cdcgan_generator_v2, train_dscr!, train_gen_cdcgan!, gan_image_output
 using MLDatasets: MNIST
 using Flux.Data: DataLoader
 using Flux
@@ -7,8 +7,8 @@ using Zygote
 using Logging
 using TensorBoardLogger
 using ArgParse
-#using Plots
-using UnicodePlots
+using Plots
+using Printf
 
 """
     run_mnist_gan
@@ -35,13 +35,13 @@ s = ArgParseSettings()
         arg_type = Float64
         default = 0.0002
     "--batch_size"
-        help = "Batch size. Default = 1024"
+        help = "Batch size. Default = 128"
         arg_type = Int
         default = 128
     "--latent_dim"
         help = "Size of the latent dimension. Default = 100"
         arg_type = Int
-        default = 128
+        default = 100
     "--optimizer"
         help = "Optimizer for both, generator and discriminator. Defaults to ADAM"
         arg_type = String
@@ -97,17 +97,17 @@ train_loader = DataLoader((data=train_x, label=train_y), batchsize=args["batch_s
 # Define the discriminator network.
 # The networks takes a flattened 28x28=784 image as input and outputs the
 # probability of the image belonging to the real dataset.
-discriminator = get_cdcgan_discriminator(args) |> gpu;
+discriminator = get_cdcgan_discriminator_v2(args) |> gpu;
 
 # The generator will generate images which come from the learned
 # distribution. The output layer has a tanh activation function
 # which maps the output to [-1:1], the same range as in the
 # pre-processed MNIST images
-generator = get_cdcgan_generator(args) |> gpu;
+generator = get_cdcgan_generator_v2(args) |> gpu;
 
 # Optimizer for the discriminator
-opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"], (0.5, 0.999));
-opt_gen = getfield(Flux, Symbol(args["optimizer"]))(args["lr_gen"], (0.5, 0.999));
+opt_dscr = getfield(Flux, Symbol(args["optimizer"]))(args["lr_dscr"]);
+opt_gen = getfield(Flux, Symbol(args["optimizer"]))(args["lr_gen"]);
 # Extract the parameters of the discriminator and generator
 ps_dscr = Flux.params(discriminator);
 ps_gen = Flux.params(generator);
@@ -120,7 +120,6 @@ lossvec_dscr = zeros(args["num_epochs"]);
 # for number of training iterations
 #with_logger(tb_logger) do
     for n in 1:args["num_epochs"]
-        output = false
         loss_sum_gen = 0.0f0
         loss_sum_dscr = 0.0f0
 
@@ -152,22 +151,6 @@ lossvec_dscr = zeros(args["num_epochs"]);
 
             loss_gen = train_gen_cdcgan!(discriminator, generator, args["latent_dim"], y, ps_gen, opt_gen, this_batch)
             loss_sum_gen += loss_gen
-                
-        
-            if(n % args["output_period"] == 0 && output == false)
-                @show n
-                noise = randn(args["latent_dim"], 4);
-                random_labels = rand(0:9, 4);
-                random_labels_oh = Flux.onehotbatch(random_labels, 0:9);
-                @show random_labels
-                random_vector_labels = cat(noise, random_labels_oh, dims=1) |> gpu;
-                fake_img = reshape(generator(random_vector_labels), 28, 4*28) |> cpu;
-                fake_img = (clamp!(fake_img, -1.0f0, 1.0f0) .+ 1.0f0) * 0.5;
-                p = heatmap(fake_img, colormap=:plasma);
-                print(p)
-                #log_image(tb_logger, "generatedimage", fake_img, ImageFormat(202))
-                output = true
-            end
         end
         # Add the per-sample loss of the generator and discriminator
         # The train_...! function call binarycrossentropy where the default is agg=mean. That is,
@@ -177,5 +160,10 @@ lossvec_dscr = zeros(args["num_epochs"]);
         lossvec_gen[n] = loss_sum_gen / length(train_loader)
         lossvec_dscr[n] = loss_sum_dscr / length(train_loader)
         @info "end of epoch" n loss_generator=lossvec_gen[n] loss_discriminator=lossvec_dscr[n]
+
+        if(n % args["output_period"] == 0)
+            image_name = @sprintf "cdcgan_images_%02d.png" n
+            gan_image_output(generator, image_name, args)
+        end
     end # epoch
 #end # Logger
